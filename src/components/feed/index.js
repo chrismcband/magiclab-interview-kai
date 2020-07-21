@@ -11,11 +11,17 @@ const MAX_ATTEMPTS_PER_POLL = 4;
 const POLL_URL =
   "https://magiclab-twitter-interview.herokuapp.com/candidate-name/api";
 
+const STYLE = {
+  height: "100vh",
+  overflowY: "auto"
+};
+
 export default class Feed extends React.Component {
   constructor(props) {
     super(props);
     //Initialising some props to be undefined
     // for the sake of documentation
+    this.feedRef = React.createRef();
     this.state = {
       tweets: [],
       interval: undefined,
@@ -25,9 +31,7 @@ export default class Feed extends React.Component {
   }
 
   componentDidMount = () => {
-    const interval = setInterval(this.poll, POLL_TIME);
-    this.setState({ interval });
-    this.poll();
+    this.startPoll();
   };
 
   componentWillUnmount = () => {
@@ -43,7 +47,13 @@ export default class Feed extends React.Component {
     this.setState({ stopPolling: true });
   };
 
-  poll = async () => {
+  startPoll = () => {
+    const interval = setInterval(this.poll, POLL_TIME);
+    this.setState({ interval, stopPolling: false });
+    this.poll();
+  };
+
+  poll = async (direction = "recent") => {
     const { pollLock, stopPolling } = this.state;
     if (pollLock) {
       console.warn("Already polling");
@@ -51,13 +61,17 @@ export default class Feed extends React.Component {
     }
     this.setState({ pollLock: true });
     for (let i = 0; i < MAX_ATTEMPTS_PER_POLL; i++) {
-      if (stopPolling) {
-        // If the component has had componentWillUnmount or stopPoll called
-        // stop any poll loops
-        return;
+      if (stopPolling && direction === "recent") {
+        return this.setState({
+          pollLock: false
+        });
       }
       try {
-        await this.fetchTweets();
+        if (direction === "recent") {
+          await this.fetchLatestTweets();
+        } else {
+          await this.fetchPastTweets();
+        }
         return this.setState({
           pollLock: false
         });
@@ -74,7 +88,7 @@ export default class Feed extends React.Component {
     });
   };
 
-  fetchTweets = async () => {
+  fetchLatestTweets = async () => {
     const { tweets, lastId } = this.state;
     const params =
       lastId === undefined
@@ -89,19 +103,67 @@ export default class Feed extends React.Component {
     if (data.length === 0) {
       return;
     }
-    const [mostRecent] = data;
+
+    const newTweets = [...data, ...tweets];
+    const [mostRecent] = newTweets;
+    const oldest = newTweets[newTweets.length - 1];
     this.setState({
-      tweets: [...data, ...tweets],
-      lastId: mostRecent.id
+      tweets: newTweets,
+      lastId: mostRecent.id,
+      firstId: oldest.id
     });
   };
 
-  render() {
-    const { tweets } = this.state;
+  fetchPastTweets = async () => {
+    const { tweets, firstId } = this.state;
+    const params =
+      firstId === undefined
+        ? {
+            count: INITIAL_BATCH_SIZE
+          }
+        : {
+            count: BATCH_SIZE,
+            beforeId: firstId
+          };
+    const { data } = await axios.get(POLL_URL, { params });
+    if (data.length === 0) {
+      return;
+    }
+
+    const newTweets = [...tweets, ...data];
+    const [mostRecent] = newTweets;
+    const oldest = newTweets[newTweets.length - 1];
+    this.setState({
+      tweets: newTweets,
+      lastId: mostRecent.id,
+      firstId: oldest.id
+    });
+  };
+
+  onScroll = () => {
+    const feedElement = this.feedRef.current;
+    const deltaY = feedElement.scrollTop;
+    const { interval } = this.state;
+    const isAtTop = deltaY === 0;
+    const isAtBottom =
+      feedElement.scrollHeight - feedElement.scrollTop ===
+      feedElement.clientHeight;
+    if (isAtTop && interval === undefined) {
+      this.startPoll();
+    } else if (isAtBottom) {
+      this.poll("past");
+    } else if (deltaY !== 0 && interval !== undefined) {
+      this.stopPoll();
+    }
+  };
+
+  render = () => {
+    const { tweets, scrollArgs } = this.state;
     return (
-      <>
+      <div style={STYLE} onScroll={this.onScroll} ref={this.feedRef}>
+        <pre>{JSON.stringify(scrollArgs, null, 4)}</pre>
         {tweets && tweets.map(tweet => <Tweet tweet={tweet} key={tweet.id} />)}
-      </>
+      </div>
     );
-  }
+  };
 }
